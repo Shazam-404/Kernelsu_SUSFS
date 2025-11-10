@@ -79,8 +79,8 @@ jobs:
             fi
           else
             sed -i '/#include/a \
-         #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
-          fi
+           #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
+           fi
 
       - name: Upload Rejected Hunks (if any)
         if: always()
@@ -147,3 +147,4 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
+
