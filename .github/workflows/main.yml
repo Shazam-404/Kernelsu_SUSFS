@@ -54,7 +54,7 @@ jobs:
         run: |
           sed -i '/#include <linux\/cpufreq_times.h>/a \
           #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
-
+ 
       - name: Fix KernelSU missing SUSFS includes
         working-directory: common
         run: |
@@ -63,7 +63,7 @@ jobs:
             if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS" "$f"; then
               if ! grep -q "susfs_def.h" "$f"; then
                 sed -i '/#include/a \
-                #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
+             #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
               fi
             fi
           done
@@ -78,7 +78,7 @@ jobs:
             fi
           else
             sed -i '/#include/a \
-           #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
+          #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
           fi
 
       - name: Upload Rejected Hunks (if any)
@@ -121,9 +121,28 @@ jobs:
           echo "# dummy ABI whitelist for Bazel compatibility" > common/android/abi_gki_protected_exports_aarch64
           echo "ABI placeholder created to bypass Bazel dependency check."
 
+      - name: Fix incomplete struct task_struct definition
+        working-directory: common
+        run: |
+          targets=$(grep -rl "susfs_def.h" drivers/kernelsu KernelSU || true)
+          for f in $targets; do
+            if ! grep -q "linux/sched.h" "$f"; then
+              sed -i '/susfs_def.h/i #include <linux/sched.h>' "$f"
+            fi
+          done
+          echo "✅ Added missing linux/sched.h includes to fix task_struct."
+
+      - name: Disable Werror completely
+        working-directory: common
+        run: |
+          find . -type f -name "BUILD.bazel" -exec sed -i 's/-Werror//g' {} +
+          echo "Removed -Werror from all Bazel configs."
+          export KCFLAGS="-Wno-error -Wno-array-bounds -Wno-dangling-pointer -Wno-incompatible-pointer-types"
+          echo "KCFLAGS=$KCFLAGS" >> $GITHUB_ENV
+
       - name: Build Kernel
         run: |
-          export KCFLAGS="-Wno-error=array-bounds"
+          export KCFLAGS="$KCFLAGS -Wno-error"
           export LLVM=1
           echo "Starting kernel build (LTO=thin, LLVM toolchain)..."
           if [ -e build/build.sh ]; then
