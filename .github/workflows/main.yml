@@ -57,12 +57,14 @@ jobs:
           echo "---- Checking for failed hunks ----"
           find . -name "*.rej" -type f -print -exec echo "---- {} ----" \; -exec cat {} \; || true
 
+          
+
       - name: Fix fs/proc/base.c manually
         working-directory: common
         run: |
           echo "Applying manual fix for fs/proc/base.c (SUSFS include patch)..."
           sed -i '/#include <linux\/cpufreq_times.h>/a \
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
+          #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
           echo "Fix applied successfully."
 
       - name: Fix KernelSU files for SUSFS symbols
@@ -101,7 +103,7 @@ jobs:
           ksud_file="drivers/kernelsu/ksud.c"
           if grep -q "susfs_is_sus_su_ready" "$ksud_file"; then
             sed -i '/#include/a \
-           #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
+            #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
             echo "Inserted susfs_is_sus_su_ready definition in $ksud_file"
           else
             echo "No reference found, skipping."
