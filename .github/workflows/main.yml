@@ -25,8 +25,7 @@ jobs:
           repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
 
       - name: Spoof Kernel Uname as 'shazam'
-        run: |
-          sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
+        run: sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
       - name: Add KernelSU
         working-directory: common
@@ -36,13 +35,7 @@ jobs:
         run: |
           git clone https://gitlab.com/simonpunk/susfs4ksu -b gki-${{ matrix.android }}-${{ matrix.kernel }}
           cd susfs4ksu
-
-          case "${{ matrix.android }}-${{ matrix.kernel }}" in
-            "android15-6.6")
-              susfs_commit="f450ec00bf592d080f59b01ff6f9242456c9a427"
-            ;;
-          esac
-
+          susfs_commit="f450ec00bf592d080f59b01ff6f9242456c9a427"
           git checkout ${susfs_commit}
 
       - name: Apply SUSFS Patches
@@ -54,59 +47,39 @@ jobs:
           cd KernelSU
           patch -p1 < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           cd ..
-          echo "---- Checking for failed hunks ----"
-          find . -name "*.rej" -type f -print -exec echo "---- {} ----" \; -exec cat {} \; || true
-
-          
+          find . -name "*.rej" -print || true
 
       - name: Fix fs/proc/base.c manually
         working-directory: common
         run: |
-          echo "Applying manual fix for fs/proc/base.c (SUSFS include patch)..."
           sed -i '/#include <linux\/cpufreq_times.h>/a \
           #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
-          echo "Fix applied successfully."
+          
 
-      - name: Fix KernelSU files for SUSFS symbols
+      - name: Fix KernelSU missing SUSFS includes
         working-directory: common
         run: |
-          echo "Patching KernelSU source/header files to include susfs_def.h where needed..."
-          files=$(find KernelSU -type f -name '*.c' -o -name '*.h' ; find drivers/kernelsu -type f -name '*.c' -o -name '*.h') || true
-
+          files=$(find KernelSU drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \))
           for f in $files; do
-            [ -f "$f" ] || continue
-            if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS|susfs_def.h" "$f"; then
-              if grep -q "include <linux/susfs_def.h>" "$f"; then
-                echo "already patched: $f"
-                continue
-              fi
-
-              last_include_line=$(nl -ba "$f" | grep -n "^ *[0-9]\+.*#include" | tail -n1 | cut -d: -f1 || true)
-              if [ -z "$last_include_line" ]; then
-                printf "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif\n\n" | cat - "$f" > "$f".new && mv "$f".new "$f"
-                echo "prepended susfs include to $f"
-              else
-                awk -v li="$last_include_line" '
-                  NR==li {print; print "#ifdef CONFIG_KSU_SUSFS_SUS_MAP"; print "#include <linux/susfs_def.h>"; print "#endif"; next}
-                  {print}
-                ' "$f" > "$f".new && mv "$f".new "$f"
-                echo "inserted susfs include into $f"
+            if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS" "$f"; then
+              if ! grep -q "susfs_def.h" "$f"; then
+                sed -i '/#include/a \
+            #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
               fi
             fi
           done
-          echo "KernelSU files patching done."
 
       - name: Fix susfs_is_sus_su_ready missing symbol
         working-directory: common
         run: |
-          echo "Adding fallback declaration for susfs_is_sus_su_ready..."
           ksud_file="drivers/kernelsu/ksud.c"
           if grep -q "susfs_is_sus_su_ready" "$ksud_file"; then
-            sed -i '/#include/a \
-            #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
-            echo "Inserted susfs_is_sus_su_ready definition in $ksud_file"
+            if ! grep -q "EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready)" "$ksud_file"; then
+              sed -i '/susfs_is_sus_su_ready *=/a EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);' "$ksud_file"
+            fi
           else
-            echo "No reference found, skipping."
+            sed -i '/#include/a \
+         #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
           fi
 
       - name: Upload Rejected Hunks (if any)
@@ -118,8 +91,7 @@ jobs:
 
       - name: Add Configuration
         run: |
-          cat << EOF >> common/arch/arm64/configs/gki_defconfig
-          # KernelSU and SUSFS Config
+          cat <<EOF >> common/arch/arm64/configs/gki_defconfig
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
@@ -143,39 +115,31 @@ jobs:
 
       - name: Fix Kernel Name
         run: |
-          if [ -f common/BUILD.bazel ]; then
-            [ -f android/abi_gki_protected_exports_aarch64 ] || sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' common/BUILD.bazel
-          fi
-
           sed -i 's| -dirty||g' common/scripts/setlocalversion
-          rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
-          if [ "${{ matrix.android }}-${{ matrix.kernel }}" != "android15-6.6" ]; then
-            sed -i '$s|$res|${{ matrix.android }}$res|g' common/scripts/setlocalversion
-          fi
+          rm common/android/abi_gki_protected_exports_* || true
 
       - name: Build Kernel
         run: |
+          export KCFLAGS="-Wno-error=array-bounds"
+          export LLVM=1
           if [ -e build/build.sh ]; then
-            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
+            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           else
-            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist" || exit 1
+            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist"
           fi
 
       - name: Copy Boot Images
         run: |
           mkdir artifacts && cd artifacts
-          if [ "${{ matrix.android }}-${{ matrix.kernel }}" != "android12-5.10" ]; then
-            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot.img ${{ matrix.android }}-${{ matrix.kernel }}_boot.img
-            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-gz.img ${{ matrix.android }}-${{ matrix.kernel }}_boot-gz.img
-            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-lz4.img ${{ matrix.android }}-${{ matrix.kernel }}_boot-lz4.img
-          fi
+          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot.img . || true
+          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-gz.img . || true
+          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-lz4.img . || true
 
       - name: Make AnyKernel3 Zip
         run: |
           git clone https://github.com/Kernel-SU/AnyKernel3.git && cd AnyKernel3
-          rm -rf .git
           sed -i 's|^kernel\.string=.*|kernel.string=KernelSU SUSFS by Shazam|' anykernel.sh
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/Image . 2>/dev/null || echo "No Image file!"
+          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/Image . 2>/dev/null || true
           zip -r ../artifacts/${{ matrix.android }}-${{ matrix.kernel }}-AnyKernel3.zip .
 
       - name: Upload Artifacts
