@@ -62,8 +62,37 @@ jobs:
         run: |
           echo "Applying manual fix for fs/proc/base.c (SUSFS include patch)..."
           sed -i '/#include <linux\/cpufreq_times.h>/a \
-          #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
           echo "Fix applied successfully."
+
+      - name: Fix KernelSU files for SUSFS symbols
+        working-directory: common
+        run: |
+          echo "Patching KernelSU source/header files to include susfs_def.h where needed..."
+          files=$(find KernelSU -type f -name '*.c' -o -name '*.h' ; find drivers/kernelsu -type f -name '*.c' -o -name '*.h') || true
+
+          for f in $files; do
+            [ -f "$f" ] || continue
+            if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS|susfs_def.h|susfs_is_sus_su_ready|susfs_is_current_proc_umounted" "$f"; then
+              if grep -q "include <linux/susfs_def.h>" "$f"; then
+                echo "already patched: $f"
+                continue
+              fi
+
+              last_include_line=$(nl -ba "$f" | grep -n "^ *[0-9]\+.*#include" | tail -n1 | cut -d: -f1 || true)
+              if [ -z "$last_include_line" ]; then
+                printf "#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif\n\n" | cat - "$f" > "$f".new && mv "$f".new "$f"
+                echo "prepended susfs include to $f"
+              else
+                awk -v li="$last_include_line" '
+                  NR==li {print; print "#ifdef CONFIG_KSU_SUSFS_SUS_MAP"; print "#include <linux/susfs_def.h>"; print "#endif"; next}
+                  {print}
+                ' "$f" > "$f".new && mv "$f".new "$f"
+                echo "inserted susfs include into $f"
+              fi
+            fi
+          done
+          echo "KernelSU files patching done."
 
       - name: Upload Rejected Hunks (if any)
         if: always()
@@ -78,6 +107,7 @@ jobs:
           # KernelSU and SUSFS Config
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
@@ -95,19 +125,16 @@ jobs:
           CONFIG_KSU_TRACEPOINT_HOOK=y
           EOF
 
-          # Remove check_defconfig
           sed -i 's|check_defconfig||g' common/build.config.gki
 
       - name: Fix Kernel Name
         run: |
-          # Fix bazel build error
           if [ -f common/BUILD.bazel ]; then
             [ -f android/abi_gki_protected_exports_aarch64 ] || sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' common/BUILD.bazel
           fi
 
           sed -i 's| -dirty||g' common/scripts/setlocalversion
           rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
-
           if [ "${{ matrix.android }}-${{ matrix.kernel }}" != "android15-6.6" ]; then
             sed -i '$s|$res|${{ matrix.android }}$res|g' common/scripts/setlocalversion
           fi
