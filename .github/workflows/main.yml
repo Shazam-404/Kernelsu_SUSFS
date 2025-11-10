@@ -21,76 +21,101 @@ jobs:
       - name: Initialize and Sync Kernel Source
         run: |
           sudo apt update -y && sudo apt install -y repo
-          repo init --depth 1 -u https://android.googlesource.com/kernel/manifest -b common ${{ matrix.android }}-${{ matrix.kernel }}
-          mkdir -p .repo/local_manifests && cp manifests/kernel.xml .repo/local_manifests/default.xml
+          repo init --depth 1 -u https://android.googlesource.com/kernel/manifest -b common-${{ matrix.android }}-${{ matrix.kernel }}
           repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
 
       - name: Spoof Kernel Uname as 'shazam'
-        run: sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
+        run: |
+          sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
       - name: Add SukiSU
-        working-directory: SukiSU
-        run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+        working-directory: common
+        run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+
+      - name: Checkout SUSFS
+        run: |
+          git clone https://gitlab.com/simonpunk/susfs4ksu -b gki-${{ matrix.android }}-${{ matrix.kernel }}
+          cd susfs4ksu
+
+          case "${{ matrix.android }}-${{ matrix.kernel }}" in
+            "android15-6.6")
+              susfs_commit="f450ec00bf592d080f59b01ff6f9242456c9a427"
+            ;;
+          esac
+
+          git checkout ${susfs_commit}
 
       - name: Apply SUSFS Patches
-        working-directory: SukiSU
+        working-directory: common
         run: |
-          git clone https://gitlab.com/simonpunk/susfs4ksu -b gki-android15-6.6 ../susfs4ksu
           cp ../susfs4ksu/kernel_patches/fs/* fs
           cp ../susfs4ksu/kernel_patches/include/linux/* include/linux
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
-
-      - name: Manual Hook
-        run: |
-          git clone https://github.com/SukiSU-Ultra/SukiSU_patch.git
-          cd SukiSU
-          patch -p1 < ../SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch
+          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ matrix.android }}-${{ matrix.kernel }}.patch
+          cd KernelSU
+          patch -p1 < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
 
       - name: Add Configuration
         run: |
-          cat << EOF >> sm7550/arch/arm64/configs/gki_defconfig
-          # KernelSU & SUSFS
+          cat << EOF >> common/arch/arm64/configs/gki_defconfig
+          # KernelSU and SUSFS Config
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_SU=n
-          CONFIG_KSU_MANUAL_HOOK=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-
-          # Mountify Support
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_SU=y
           EOF
 
           # Remove check_defconfig
-          sed -i 's|check_defconfig||g' sm7550/build.config.gki
+          sed -i 's|check_defconfig||g' common/build.config.gki
 
-          - name: Remove -dirty from uname
-            working-directory: sm7550
-            run: sed -i 's| -dirty||g' scripts/setlocalversion
+      - name: Fix Kernel Name
+        run: |
+          # Fix bazel build error
+          if [ -f common/BUILD.bazel ]; then
+            [ -f android/abi_gki_protected_exports_aarch64 ] || sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' common/BUILD.bazel
+          fi
+
+          sed -i 's| -dirty||g' common/scripts/setlocalversion
+          rm common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+
+          if [ "${{ matrix.android }}-${{ matrix.kernel }}" != "android15-6.6" ]; then
+            sed -i '$s|$res|${{ matrix.android }}$res|g' common/scripts/setlocalversion
+          fi
 
       - name: Build Kernel
         run: |
-          export KCFLAGS="$KCFLAGS -Wno-error"
-          export LLVM=1
-          echo "Starting kernel build (LTO=thin, LLVM toolchain)..."
           if [ -e build/build.sh ]; then
-            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
+            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
           else
-            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist"
+            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist" || exit 1
           fi
 
       - name: Copy Boot Images
         run: |
           mkdir artifacts && cd artifacts
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot.img . || true
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-gz.img . || true
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-lz4.img . || true
+          if [ "${{ matrix.android }}-${{ matrix.kernel }}" != "android12-5.10" ]; then
+            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot.img ${{ matrix.android }}-${{ matrix.kernel }}_boot.img
+            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-gz.img ${{ matrix.android }}-${{ matrix.kernel }}_boot-gz.img
+            cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot-lz4.img ${{ matrix.android }}-${{ matrix.kernel }}_boot-lz4.img
+          fi
 
       - name: Make AnyKernel3 Zip
         run: |
           git clone https://github.com/Kernel-SU/AnyKernel3.git && cd AnyKernel3
+          rm -rf .git
           sed -i 's|^kernel\.string=.*|kernel.string=KernelSU SUSFS by Shazam|' anykernel.sh
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/Image . 2>/dev/null || true
+          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/Image . 2>/dev/null || echo "No Image file!"
           zip -r ../artifacts/${{ matrix.android }}-${{ matrix.kernel }}-AnyKernel3.zip .
 
       - name: Upload Artifacts
@@ -98,6 +123,3 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
-
-
-
