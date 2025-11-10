@@ -21,7 +21,7 @@ jobs:
       - name: Initialize and Sync Kernel Source
         run: |
           sudo apt update -y && sudo apt install -y repo
-          repo init --depth 1 -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6${{ matrix.android }}-${{ matrix.kernel }}
+          repo init --depth 1 -u https://android.googlesource.com/kernel/manifest -b common ${{ matrix.android }}-${{ matrix.kernel }}
           repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
 
       - name: Spoof Kernel Uname as 'shazam'
@@ -97,4 +97,5 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
+
 
