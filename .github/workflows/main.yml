@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-kernel:
-    name: Build SukiSU + SUSFS
+    name: Build KernelSU + SUSFS
     runs-on: ubuntu-latest
 
     strategy:
@@ -27,7 +27,7 @@ jobs:
       - name: Spoof Kernel Uname as 'shazam'
         run: sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
-      - name: Add SukiSU
+      - name: Add KernelSU
         working-directory: common
         run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
@@ -48,53 +48,30 @@ jobs:
           cd ..
           find . -name "*.rej" -print || true
 
-      - name: Fix fs/proc/base.c manually
-        working-directory: common
-        run: |
-          sed -i '/#include <linux\/cpufreq_times.h>/a \
-          #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
-
-      - name: Fix KernelSU missing SUSFS includes
-        working-directory: common
-        run: |
-          files=$(find KernelSU drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \))
-          for f in $files; do
-            if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS" "$f"; then
-              if ! grep -q "susfs_def.h" "$f"; then
-                sed -i '/#include/a \
-           #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
-              fi
-            fi
-          done
-
-      - name: Force define susfs_is_sus_su_ready at file top
+      - name: Force sched.h + susfs_is_sus_su_ready at top of ksud.c
         working-directory: common
         run: |
           ksud="drivers/kernelsu/ksud.c"
-          if ! grep -q "susfs_is_sus_su_ready" "$ksud"; then
-            echo "Inserting susfs_is_sus_su_ready at top of ksud.c..."
+          if [ -f "$ksud" ]; then
+            echo "Patching $ksud..."
             sed -i '1i \
-          #ifdef CONFIG_KSU_SUSFS\n#include <linux/sched.h>\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif\n' "$ksud"
-          else
-            echo "susfs_is_sus_su_ready already exists, skipping."
+             #include <linux/sched.h>\n#ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif\n' "$ksud"
+            head -n 15 "$ksud"
           fi
-          head -n 20 "$ksud"
 
-      - name: Disable Werror completely
+      - name: Disable Werror and noisy warnings
         working-directory: common
         run: |
+          echo "Removing all -Werror and disabling strict warnings..."
           find . -type f -name "BUILD.bazel" -exec sed -i 's/-Werror//g' {} +
-          echo "Removed -Werror from all Bazel configs."
-          export KCFLAGS="-Wno-error -Wno-array-bounds -Wno-dangling-pointer -Wno-incompatible-pointer-types"
+          export KCFLAGS="-Wno-error -Wno-array-bounds -Wno-strict-overflow -Wno-dangling-pointer -Wno-incompatible-pointer-types"
           echo "KCFLAGS=$KCFLAGS" >> $GITHUB_ENV
 
-      - name: Fix ABI whitelist (remove reference and create placeholder)
+      - name: Fix ABI whitelist
         run: |
-          echo "Fixing ABI whitelist references..."
           sed -i '/abi_gki_protected_exports_aarch64/d' common/BUILD.bazel || true
-          sed -i '/protected_exports_list/d' common/BUILD.bazel || true
           mkdir -p common/android
-          echo "# dummy ABI whitelist for Bazel compatibility" > common/android/abi_gki_protected_exports_aarch64
+          echo "# dummy ABI whitelist" > common/android/abi_gki_protected_exports_aarch64
 
       - name: Add Configuration
         run: |
@@ -119,7 +96,7 @@ jobs:
         run: |
           export KCFLAGS="$KCFLAGS -Wno-error"
           export LLVM=1
-          echo "Starting kernel build (LLVM + LTO=thin)..."
+          echo "Building kernel with LLVM..."
           if [ -e build/build.sh ]; then
             LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           else
