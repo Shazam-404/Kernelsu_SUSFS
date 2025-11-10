@@ -62,7 +62,7 @@ jobs:
         run: |
           echo "Applying manual fix for fs/proc/base.c (SUSFS include patch)..."
           sed -i '/#include <linux\/cpufreq_times.h>/a \
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
+          #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
           echo "Fix applied successfully."
 
       - name: Fix KernelSU files for SUSFS symbols
@@ -169,3 +169,4 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
+
