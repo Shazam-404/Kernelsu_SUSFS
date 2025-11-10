@@ -30,7 +30,7 @@ jobs:
 
       - name: Add KernelSU
         working-directory: common
-        run: curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v1.0.5
+        run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
       - name: Checkout SUSFS
         run: |
@@ -39,7 +39,7 @@ jobs:
 
           case "${{ matrix.android }}-${{ matrix.kernel }}" in
             "android15-6.6")
-              susfs_commit="0ed9845a3f6ed624d55484384f2b414a7527fc3b"
+              susfs_commit="f450ec00bf592d080f59b01ff6f9242456c9a427"
             ;;
           esac
 
@@ -74,6 +74,7 @@ jobs:
           CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_SU=y
+          CONFIG_KSU_TRACEPOINT_HOOK=y
           EOF
 
           # Remove check_defconfig
@@ -123,3 +124,4 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
+
