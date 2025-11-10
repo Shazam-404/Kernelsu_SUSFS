@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-kernel:
-    name: Build KernelSU + SUSFS
+    name: Build SukiSU + SUSFS
     runs-on: ubuntu-latest
 
     strategy:
@@ -27,7 +27,7 @@ jobs:
       - name: Spoof Kernel Uname as 'shazam'
         run: sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
-      - name: Add KernelSU
+      - name: Add SukiSU
         working-directory: common
         run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
@@ -62,56 +62,23 @@ jobs:
             if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS" "$f"; then
               if ! grep -q "susfs_def.h" "$f"; then
                 sed -i '/#include/a \
-              #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
+           #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
               fi
             fi
           done
 
-      - name: Fix incomplete struct task_struct definition
+      - name: Force define susfs_is_sus_su_ready at file top
         working-directory: common
         run: |
-          targets=$(grep -rl "susfs_def.h" drivers/kernelsu KernelSU || true)
-          for f in $targets; do
-            if ! grep -q "linux/sched.h" "$f"; then
-              sed -i '/susfs_def.h/i #include <linux/sched.h>' "$f"
-            fi
-          done
-          echo "✅ Added missing linux/sched.h includes to fix task_struct."
-
-      - name: Ensure susfs_is_sus_su_ready is defined (robust)
-        working-directory: common
-        run: |
-          set -euo pipefail
           ksud="drivers/kernelsu/ksud.c"
-          if [ ! -f "$ksud" ]; then
-            echo "File $ksud not found, skipping."
-            exit 0
-          fi
-
-          if grep -q -E '(^|[^a-zA-Z0-9_])susfs_is_sus_su_ready([^a-zA-Z0-9_]|$)' "$ksud"; then
-            echo "susfs_is_sus_su_ready already present in $ksud"
-            if ! grep -q "EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready)" "$ksud"; then
-              sed -i '/susfs_is_sus_su_ready *=/a EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);' "$ksud" || true
-            fi
-            exit 0
-          fi
-
-          echo "Inserting guarded definition for susfs_is_sus_su_ready before first use..."
-          first_use_line=$(grep -n -m1 -E "susfs_is_sus_su_ready\s*=" "$ksud" | cut -d: -f1 || true)
-          if [ -z "$first_use_line" ]; then
-            first_use_line=$(grep -n -m1 -E "EXPORT_SYMBOL_GPL\\(susfs_is_sus_su_ready\\)" "$ksud" | cut -d: -f1 || true)
-          fi
-
-          if [ -z "$first_use_line" ]; then
-            last_inc=$(nl -ba "$ksud" | sed -n '1,200p' | grep -n "#include" | tail -n1 | cut -d: -f1 || true)
-            if [ -z "$last_inc" ]; then
-              printf "#ifdef CONFIG_KSU_SUSFS\n#include <linux/sched.h>\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif\n\n" | cat - "$ksud" > "$ksud".new && mv "$ksud".new "$ksud"
-            else
-              awk -v li="$last_inc" 'NR==li{print; print "#ifdef CONFIG_KSU_SUSFS"; print "bool susfs_is_sus_su_ready = false;"; print "EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);"; print "#endif"; next} {print}' "$ksud" > "$ksud".new && mv "$ksud".new "$ksud"
-            fi
+          if ! grep -q "susfs_is_sus_su_ready" "$ksud"; then
+            echo "Inserting susfs_is_sus_su_ready at top of ksud.c..."
+            sed -i '1i \
+          #ifdef CONFIG_KSU_SUSFS\n#include <linux/sched.h>\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif\n' "$ksud"
           else
-            awk -v ln="$first_use_line" 'NR==ln{print "#ifdef CONFIG_KSU_SUSFS"; print "bool susfs_is_sus_su_ready = false;"; print "EXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);"; print "#endif"; } {print}' "$ksud" > "$ksud".new && mv "$ksud".new "$ksud"
+            echo "susfs_is_sus_su_ready already exists, skipping."
           fi
+          head -n 20 "$ksud"
 
       - name: Disable Werror completely
         working-directory: common
