@@ -25,7 +25,7 @@ jobs:
         run: |
           sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
-      - name: Add SukiSU
+      - name: Add KernelSU
         working-directory: common
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
@@ -48,20 +48,26 @@ jobs:
       - name: Fix missing symbols and includes
         working-directory: common
         run: |
-          # Ensure sched.h + symbol declaration exist
+          # Fix missing susfs_is_sus_su_ready
           file="drivers/kernelsu/ksud.c"
           if ! grep -q "susfs_is_sus_su_ready" "$file"; then
-            echo "Injecting missing declaration into ksud.c..."
+            echo "Injecting missing 'susfs_is_sus_su_ready' symbol into ksud.c..."
+            sed -i '/#include <linux\/sched.h>/a \
+           #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$file" || \
             sed -i '1i #include <linux/sched.h>\n#ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$file"
           fi
 
-          # Ensure fs/proc/base.c has SUSFS include
+          # Fix missing include in fs/proc/base.c
           file2="fs/proc/base.c"
           if grep -q "BIT_SUS_MAPS" "$file2" && ! grep -q "susfs_def.h" "$file2"; then
-            echo "Injecting missing SUSFS include into base.c..."
+            echo "Injecting missing SUSFS include into fs/proc/base.c..."
             sed -i '/#include <linux\/cpufreq_times.h>/a \
-            #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif' "$file2"
+          #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif' "$file2"
           fi
+
+          # Print verification for debugging
+          echo "==== First 30 lines of ksud.c (post-fix) ===="
+          head -n 30 "$file"
 
       - name: Add Kernel Config
         run: |
