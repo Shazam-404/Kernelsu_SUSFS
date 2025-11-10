@@ -1,14 +1,11 @@
 name: Release
 
 on:
-  push:
-    paths:
-      - ".github/workflows/main.yml"
   workflow_dispatch:
 
 jobs:
   build-kernel:
-    name: Build KernelSU + SUSFS
+    name: Build SukiSU + SUSFS (GKI 6.6)
     runs-on: ubuntu-latest
 
     strategy:
@@ -18,26 +15,26 @@ jobs:
             kernel: "6.6"
 
     steps:
-      - name: Initialize and Sync Kernel Source
+      - name: Initialize Kernel Source
         run: |
           sudo apt update -y && sudo apt install -y repo
-          repo init --depth 1 -u https://android.googlesource.com/kernel/manifest -b common-${{ matrix.android }}-${{ matrix.kernel }}
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b common-${{ matrix.android }}-${{ matrix.kernel }}
           repo sync -c --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
 
       - name: Spoof Kernel Uname as 'shazam'
         run: |
           sed -i 's/^EXTRAVERSION.*/EXTRAVERSION = -shazam/' common/Makefile
 
-      - name: Add KernelSU
+      - name: Add SukiSU
         working-directory: common
-        run: curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
       - name: Checkout SUSFS
         run: |
           git clone https://gitlab.com/simonpunk/susfs4ksu -b gki-${{ matrix.android }}-${{ matrix.kernel }}
           cd susfs4ksu
-          susfs_commit="f450ec00bf592d080f59b01ff6f9242456c9a427"
-          git checkout ${susfs_commit}
+          git checkout f450ec00bf592d080f59b01ff6f9242456c9a427
 
       - name: Apply SUSFS Patches
         working-directory: common
@@ -48,31 +45,28 @@ jobs:
           cd KernelSU
           patch -p1 < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
 
-      - name: Force sched.h + susfs_is_sus_su_ready declaration
+      - name: Fix missing symbols and includes
         working-directory: common
         run: |
+          # Ensure sched.h + symbol declaration exist
           file="drivers/kernelsu/ksud.c"
           if ! grep -q "susfs_is_sus_su_ready" "$file"; then
             echo "Injecting missing declaration into ksud.c..."
             sed -i '1i #include <linux/sched.h>\n#ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$file"
           fi
-          head -n 20 "$file"
 
-      - name: Fix missing SUSFS definitions in fs/proc/base.c
-        working-directory: common
-        run: |
-          file="fs/proc/base.c"
-          if grep -q "BIT_SUS_MAPS" "$file" && ! grep -q "susfs_def.h" "$file"; then
-            echo "Injecting missing SUSFS include into $file..."
+          # Ensure fs/proc/base.c has SUSFS include
+          file2="fs/proc/base.c"
+          if grep -q "BIT_SUS_MAPS" "$file2" && ! grep -q "susfs_def.h" "$file2"; then
+            echo "Injecting missing SUSFS include into base.c..."
             sed -i '/#include <linux\/cpufreq_times.h>/a \
-           #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif' "$file"
+            #ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif' "$file2"
           fi
-          head -n 20 "$file"
 
-      - name: Add Configuration
+      - name: Add Kernel Config
         run: |
-          cat << EOF >> common/arch/arm64/configs/gki_defconfig
-          # KernelSU and SUSFS Config
+          cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
+          # KernelSU and SUSFS configuration
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n
@@ -92,35 +86,40 @@ jobs:
           CONFIG_KSU_MANUAL_HOOK=y
           EOF
 
-          # Remove check_defconfig
+          # Remove defconfig check
           sed -i 's|check_defconfig||g' common/build.config.gki
 
-      - name: Fix Kernel Name and ABI issue
+      - name: Fix Kernel Name, ABI & CFLAGS (Bazel Safe)
         run: |
           sed -i 's| -dirty||g' common/scripts/setlocalversion
           rm common/android/abi_gki_protected_exports_* || true
           echo "" > common/android/abi_gki_protected_exports_aarch64
           sed -i '/-Werror/d' common/build.config.gki.aarch64 || true
-          echo "CFLAGS_KERNEL += -Wno-error -Wno-array-bounds" >> common/build.config.gki.aarch64
+          echo 'export CFLAGS_KERNEL="$CFLAGS_KERNEL -Wno-error -Wno-array-bounds"' >> common/build.config.gki.aarch64
+          echo 'export KCFLAGS="$KCFLAGS -Wno-error -Wno-array-bounds"' >> common/build.config.gki.aarch64
+          echo 'export CLANG_FLAGS="$CLANG_FLAGS -Wno-error"' >> common/build.config.gki.aarch64
 
       - name: Build Kernel
         run: |
           if [ -e build/build.sh ]; then
             LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
           else
-            tools/bazel run --disk_cache=/home/runner/.cache/bazel --config=fast --config=stamp --lto=thin //common:kernel_aarch64_dist -- --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist" || exit 1
+            tools/bazel run --disk_cache=/home/runner/.cache/bazel \
+              --config=fast --config=stamp --lto=thin \
+              //common:kernel_aarch64_dist -- \
+              --dist_dir="out/${{ matrix.android }}-${{ matrix.kernel }}/dist" || exit 1
           fi
 
-      - name: Copy Boot Images
+      - name: Collect Artifacts
         run: |
-          mkdir artifacts && cd artifacts
-          cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/boot*.img . || echo "No boot image found."
+          mkdir -p artifacts
+          cp -r out/${{ matrix.android }}-${{ matrix.kernel }}/dist/* artifacts/ || true
 
       - name: Make AnyKernel3 Zip
         run: |
           git clone https://github.com/Kernel-SU/AnyKernel3.git && cd AnyKernel3
           rm -rf .git
-          sed -i 's|^kernel\.string=.*|kernel.string=KernelSU SUSFS by Shazam|' anykernel.sh
+          sed -i 's|^kernel\.string=.*|kernel.string=KernelSU + SUSFS by Shazam|' anykernel.sh
           cp ../out/${{ matrix.android }}-${{ matrix.kernel }}/dist/Image . || true
           zip -r ../artifacts/${{ matrix.android }}-${{ matrix.kernel }}-AnyKernel3.zip . >/dev/null
 
@@ -130,7 +129,7 @@ jobs:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
 
-      - name: Verify KernelSU + SUSFS Integration
+      - name: Verify SukiSU + SUSFS Integration
         working-directory: common
         run: |
           echo "===== Build Verification ====="
