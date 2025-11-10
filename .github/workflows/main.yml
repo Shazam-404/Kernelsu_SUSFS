@@ -54,7 +54,6 @@ jobs:
         run: |
           sed -i '/#include <linux\/cpufreq_times.h>/a \
           #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' fs/proc/base.c
-          
 
       - name: Fix KernelSU missing SUSFS includes
         working-directory: common
@@ -64,7 +63,7 @@ jobs:
             if grep -Eq "susfs_is_sus_su_ready|susfs_is_current_proc_umounted|BIT_SUS_MAPS" "$f"; then
               if ! grep -q "susfs_def.h" "$f"; then
                 sed -i '/#include/a \
-            #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
+               #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n#include <linux/susfs_def.h>\n#endif' "$f"
               fi
             fi
           done
@@ -79,8 +78,8 @@ jobs:
             fi
           else
             sed -i '/#include/a \
-           #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
-           fi
+          #ifdef CONFIG_KSU_SUSFS\nbool susfs_is_sus_su_ready = false;\nEXPORT_SYMBOL_GPL(susfs_is_sus_su_ready);\n#endif' "$ksud_file"
+          fi
 
       - name: Upload Rejected Hunks (if any)
         if: always()
@@ -113,15 +112,26 @@ jobs:
           EOF
           sed -i 's|check_defconfig||g' common/build.config.gki
 
-      - name: Fix Kernel Name
+      - name: Fix Kernel Name and ABI file issues
         run: |
+          echo "Fixing missing abi_gki_protected_exports_aarch64 reference..."
           sed -i 's| -dirty||g' common/scripts/setlocalversion
-          rm common/android/abi_gki_protected_exports_* || true
+
+          # Remove ABI dependency if missing
+          if [ ! -f common/android/abi_gki_protected_exports_aarch64 ]; then
+            sed -i '/abi_gki_protected_exports_aarch64/d' common/BUILD.bazel || true
+            sed -i '/protected_exports_list/d' common/BUILD.bazel || true
+            echo "Removed missing ABI whitelist entries."
+          fi
+
+          # Clean leftover files
+          rm -f common/android/abi_gki_protected_exports_* || true
 
       - name: Build Kernel
         run: |
           export KCFLAGS="-Wno-error=array-bounds"
           export LLVM=1
+          echo "Disabled Werror for array bounds."
           if [ -e build/build.sh ]; then
             LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           else
@@ -147,4 +157,3 @@ jobs:
         with:
           name: ${{ matrix.android }}-${{ matrix.kernel }}
           path: artifacts
-
